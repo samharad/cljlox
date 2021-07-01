@@ -9,6 +9,8 @@
 (s/def ::tokens (s/coll-of :adasam.cljlox.spec/realized-token :kind vector?))
 ;;  TODO: spec out the types of errors
 (s/def ::errors (s/coll-of map? :kind vector?))
+;; TODO: consider replacing indexing with a list-of-chars approach.
+;; Would this harm column derivation?
 (s/def ::idx (s/and integer? #(not (neg? %))))
 (s/def ::line-num (s/and integer? pos?))
 (s/def ::source string?)
