@@ -15,31 +15,37 @@
     right mind would do that rather than just... return the data of
     what errors were encountered, and let *that* be your interface,
     and let the client do anything in the world with that data.
-
   ")
 
-;; The functions should take tokens, and return e.g.
-;; {
-;;  :left {...}
-;;  :operand +
-;;  :right {...}
-;;  :errors []    -- Any errors identified while deriving this node...
-;; }                 Perhaps in practice this will be at most a single error?
-;;                   No problem with that, though.
-;;                   Or is it really all the errors associated with the derivation
-;;                   of this node's children? Almost certainly, yes.
-;;                   Just be sure not to even write the key if there are none.
+(comment
+  "TODO:
+  - Cut over to the orig. `spec`, use orchestra?
+  - Spec out ::expression
+  - Spec out errors? Loosely?
+  ")
 
-;; Oh, but I'm an idiot; we need to return the `tail`d tokens list
+(s/def ::state (s/cat :expr :adasam.cljlox.spec/expression
+                      :tokens (s/coll-of :adasam.cljlox.spec/realized-token)))
 
-;; So, perhaps we need to return [node, tokens].
-;; Makes far more sense than returning the tokens on the node!
 
-;; There's a big problem: if we catch the exception, we need to resume
-
-;(s/def ::parse-error {:type :parse-error})
-
+;; Required due to mutual recursion:
+;;  expression =calls=> equality => ... => expression
 (declare expression)
+
+(defn synchronize [tokens]
+  (loop [[tok & more-tokens :as tokens] tokens]
+    (condp #(%1 %2) (:token-type tok)
+      #{:SEMICOLON} more-tokens
+      #{:CLASS
+        :FUN
+        :VAR
+        :FOR
+        :IF
+        :WHILE
+        :PRINT
+        :RETURN
+        :EOF} tokens
+      (recur more-tokens))))
 
 (defn primary [tokens]
   {:post [(vector? %)]}
@@ -51,22 +57,25 @@
       #{:TRUE} [(literal true) more-toks]
       #{:NIL} [(literal nil) more-toks]
       #{:NUMBER :STRING} [(literal (:literal tok)) more-toks]
-      #{:LEFT_PAREN} (let [[expr [tok & more-toks :as tokens]] (expression more-toks)]
-                       (if (= :RIGHT_PAREN (:token-type tok))
-                         [{:expr-type :grouping
-                           :expression expr}
-                          more-toks]
-                         (throw+ {:type :parse-error
-                                  :token tok
-                                  :expected :RIGHT_PAREN
-                                  :tokens tokens})))
+
+      #{:LEFT_PAREN}
+      (let [[expr [tok & more-toks :as tokens]] (expression more-toks)]
+        (if (= :RIGHT_PAREN (:token-type tok))
+          [{:expr-type :grouping
+            :expression expr}
+           more-toks]
+          (throw+ {:type :parse-error
+                   :token tok
+                   :expected :RIGHT_PAREN
+                   :tokens tokens})))
+
       (throw+ {:type :parse-error
                :token tok
                :tokens tokens}))))
 
 (defn unary [tokens]
   (let [[tok & more-toks] tokens]
-    (if (#{:BANG :MINUS} tok)
+    (if (#{:BANG :MINUS} (:token-type tok))
       (let [[expr more-toks] (unary more-toks)]
         [{:expr-type :unary
           :operator tok
@@ -110,11 +119,25 @@
   (equality tokens))
 
 (defn parse [tokens]
-  (try+ (expression tokens)
-    (catch [:type :parse-error] {:keys [token expected tokens] :as e}
-      (prn (format "Error: found %s, expected %s" token expected))
-      nil)))
+  (try+
+    (let [[expr [tok & more-tokens :as tokens]] (expression tokens)]
+      (cond
+        (nil? tok) (throw+ {:type :parse-error
+                            :message "Expected EOF token."})
+        (or (some? more-tokens)
+            (not= :EOF (:token-type tok))) (throw+ {:type :parse-error
+                                                    :message "Extra tokens."
+                                                    :tokens tokens})
+        :else expr))
+    (catch [:type :parse-error] e
+      (prn (format "Error: %s" e))
+      (throw+))))
 
-(parse [{:token-type :NUMBER :literal 1}
-        {:token-type :BANG_EQUAL}])
+(let [res (parse [{:token-type :NUMBER :literal 1}
+                  {:token-type :BANG_EQUAL}
+                  {:token-type :MINUS}
+                  {:token-type :NUMBER :literal 1}
+                  {:token-type :EOF}])]
+  (s/valid? :adasam.cljlox.spec/realized-expr res)
+  (clojure.pprint/pprint res))
 
