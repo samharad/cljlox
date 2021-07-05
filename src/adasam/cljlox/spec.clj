@@ -38,7 +38,7 @@
                      :grouping})
 
 ;; Workaround due to an apparent bug re: recursive schemas
-(s/def ::expression #(identity false))
+#_(s/def ::expression #(identity false))
 #_(s/def ::expression (s/schema {:expr-type ::expr-type
                                  :value (s/or :literal-string string?
                                               :literal-num number?)
@@ -48,4 +48,5 @@
 #_(s/def ::realized-expr (s/select ::expression [:expr-type]))
 ;; TODO: cannot get the recursive schema definition working;
 ;;  may be a bug in spec-alpha2
+(s/def ::expression any?)
 (s/def ::realized-expr any?)

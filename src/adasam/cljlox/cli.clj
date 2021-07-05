@@ -4,6 +4,17 @@
             [adasam.cljlox.interpreter :as interpreter]
             [slingshot.slingshot :refer [throw+ try+]]))
 
+(comment
+  "
+  TODO:
+  - Get easy-to-run tests in place
+  - Refactor function by function
+  - Do one of the chapter 8 challenges
+  - Tighten up my specs; consider switching to spec 1 + orchestra
+  - Revisit error handling and solidify my approach
+  - Update doc
+  ")
+
 (defn report [line where message]
   (.println *err* (format "[line %s] Error %s: %s"
                           line where message))
@@ -13,26 +24,26 @@
   (let [{:keys [line where message]} err]
     (report line where message)))
 
-(defn run [source]
-  (try+
-    (let [tokens (scanner/scan-tokens source)
-          exprs (parser/parse tokens)
-          res (interpreter/evaluate exprs)]
-      (println res))
-    (catch Object e
-      (println e))))
+(defn run
+  ([source] (run source [{}]))
+  ([source env]
+   (try+
+     (let [tokens (scanner/scan-tokens source)
+           statements (parser/parse tokens)]
+       (interpreter/interpret statements env))
+     #_(catch Object e
+         (println e)))))
 
-(defn run-prompt []
-  (print "> ")
-  (flush)
-  (when-let [in (read-line)]
-    (if (= in ":exit")
-      nil
-      (let [result (run in)
-            err (:error result)]
-        (when err
-          (error err))
-        (run-prompt)))))
+(defn run-prompt
+  ([] (run-prompt [{}]))
+  ([env]
+   (print "> ")
+   (flush)
+   (when-let [in (read-line)]
+     (if (= in ":exit")
+       nil
+       (let [env (run in env)]
+         (run-prompt env))))))
 
 (defn run-file [file]
   (let [contents (slurp file)
@@ -51,4 +62,28 @@
       (System/exit 64))))
 
 (comment
-  (run-prompt))
+  (run "var a = \"global a\";
+        var b = \"global b\";
+        var c = \"global c\";
+        {
+          var a = \"outer a\";
+          var b = \"outer b\";
+          {
+            var a = \"inner a\";
+            print a;
+            print b;
+            print c;
+          }
+          print a;
+          print b;
+          print c;
+        }
+        print a;
+        print b;
+        print c;")
+  (run "var a=1;
+        var b=2;
+        print a+b;
+        a=2;
+        var c=a+b;
+        print c;"))

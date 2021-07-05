@@ -1,6 +1,7 @@
 (ns adasam.cljlox.parser
   (:require [clojure.alpha.spec :as s]
-            [slingshot.slingshot :refer [throw+ try+]]))
+            [slingshot.slingshot :refer [throw+ try+]]
+            [adasam.cljlox.spec]))
 
 (comment
   "Things I've come across while working on this:
@@ -32,6 +33,12 @@
 ;;  expression =calls=> equality => ... => expression
 (declare expression)
 
+(defn consume [tok-type tokens error]
+  (let [[tok & more-toks :as tokens] tokens]
+    (if (= tok-type (:token-type tok))
+      [tok more-toks]
+      (throw+ (assoc error :type :parse-error)))))
+
 (defn synchronize [tokens]
   (loop [[tok & more-tokens :as tokens] tokens]
     (condp #(%1 %2) (:token-type tok)
@@ -45,6 +52,9 @@
         :PRINT
         :RETURN
         :EOF} tokens
+      nil? (do
+             (println "TODO: synchronization error")
+             [])
       (recur more-tokens))))
 
 (defn primary [tokens]
@@ -58,6 +68,9 @@
       #{:NIL} [(literal nil) more-toks]
       #{:NUMBER :STRING} [(literal (:literal tok)) more-toks]
 
+      #{:IDENTIFIER} [{:expr-type :variable, :name tok}
+                      more-toks]
+
       #{:LEFT_PAREN}
       (let [[expr [tok & more-toks :as tokens]] (expression more-toks)]
         (if (= :RIGHT_PAREN (:token-type tok))
@@ -70,6 +83,7 @@
                    :tokens tokens})))
 
       (throw+ {:type :parse-error
+               :message "Could not parse primary."
                :token tok
                :tokens tokens}))))
 
@@ -115,29 +129,95 @@
                 #{:BANG_EQUAL :EQUAL_EQUAL}
                 comparison))
 
+(defn assignment [tokens]
+  (let [[expr [tok & more-toks :as tokens]] (equality tokens)]
+    (if (= :EQUAL (:token-type tok))
+      (let [[value tokens] (assignment more-toks)]
+        (if (= :variable (:expr-type expr))
+          [{:expr-type :assign, :name (:name expr), :value value}
+           tokens]
+          (do
+            (println "TODO: report error: invalid assignment target.")
+            [expr tokens])))
+      [expr tokens])))
+
+
 (defn expression [tokens]
-  (equality tokens))
+  (assignment tokens))
+
+(defn print-statement [tokens]
+  (let [[value tokens] (expression tokens)
+        [_ tokens] (consume :SEMICOLON
+                            tokens
+                            {:message "';' must follow a print value."})]
+    [{:stmt-type :print, :expression value}
+     tokens]))
+
+(defn expression-statement [tokens]
+  (let [[expression tokens] (expression tokens)
+        [_ tokens] (consume :SEMICOLON
+                            tokens
+                            {:message "';' must follow an expression."})]
+    [{:stmt-type :expression, :expression expression}
+     tokens]))
+
+(defn var-declaration [tokens]
+  (let [[name [tok & more-toks]] (consume :IDENTIFIER
+                                          tokens
+                                          {:message "Expected a variable name."})
+         stmt {:stmt-type :var, :name name}]
+    (if (= :EQUAL (:token-type tok))
+      (let [[expression tokens] (expression more-toks)
+            [_ tokens] (consume :SEMICOLON tokens {:message "Expected semicolon."})]
+        [(assoc stmt :initializer expression) tokens])
+      [stmt (second (consume :SEMICOLON more-toks {:message "Expected semicolon."}))])))
+
+
+(declare statement)
+(defn declaration [[tok & more-toks :as tokens]]
+  (try+
+    (if (= :VAR (:token-type tok))
+      (var-declaration more-toks)
+      (statement tokens))
+    (catch Object e
+      (prn e)
+      [nil (synchronize tokens)])))
+
+
+(defn block [tokens]
+  (loop [[tok & _ :as tokens] tokens
+         statements []]
+    (if (and (not (#{:RIGHT_BRACE :EOF} (:token-type tok)))
+             (not (nil? (:token-type tok))))
+      (let [[stmt tokens] (declaration tokens)]
+        (recur tokens (conj statements stmt)))
+      (let [[_ tokens] (consume :RIGHT_BRACE tokens {:message "Expected right brace."})]
+        [statements tokens]))))
+
+
+
+(defn statement [[tok & more-toks :as tokens]]
+  (case (:token-type tok)
+    :PRINT (print-statement more-toks)
+    :LEFT_BRACE (let [[statements tokens] (block more-toks)]
+                  ;; TODO put this into `block`
+                  [{:stmt-type :block
+                    :statements statements}
+                   tokens])
+    (expression-statement tokens)))
+
 
 (defn parse [tokens]
-  (try+
-    (let [[expr [tok & more-tokens :as tokens]] (expression tokens)]
-      (cond
-        (nil? tok) (throw+ {:type :parse-error
-                            :message "Expected EOF token."})
-        (or (some? more-tokens)
-            (not= :EOF (:token-type tok))) (throw+ {:type :parse-error
-                                                    :message "Extra tokens."
-                                                    :tokens tokens})
-        :else expr))
-    (catch [:type :parse-error] e
-      (prn (format "Error: %s" e))
-      (throw+))))
+  (loop [statements []
+         [tok & _ :as tokens] tokens]
+    (cond
+      (nil? tok) (throw+ {:type :parse-error
+                          :message "Expected EOF token."})
+      (= :EOF (:token-type tok)) statements
+      :else (let [[statement tokens] (declaration tokens)
+                  statements (if (some? statement)
+                               (conj statements statement)
+                               statements)]
+              (recur statements tokens)))))
 
-(let [res (parse [{:token-type :NUMBER :literal 1}
-                  {:token-type :BANG_EQUAL}
-                  {:token-type :MINUS}
-                  {:token-type :NUMBER :literal 1}
-                  {:token-type :EOF}])]
-  (s/valid? :adasam.cljlox.spec/realized-expr res)
-  (clojure.pprint/pprint res))
 
