@@ -1,0 +1,3 @@
+#!/bin/bash
+
+clj -Sdeps '{:deps {cljlox {:local/root "/Users/adamsam/workspace/lox/cljlox"}}}'  -M -m adasam.cljlox.cli $@

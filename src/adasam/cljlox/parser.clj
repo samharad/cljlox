@@ -3,6 +3,9 @@
             [slingshot.slingshot :refer [throw+ try+]]
             [adasam.cljlox.spec]))
 
+(defmacro section [name & forms]
+  (cons 'do forms))
+
 (comment
   "Things I've come across while working on this:
   - Desire to spec my central data model (`state` in the scanner,
@@ -23,6 +26,33 @@
   - Cut over to the orig. `spec`, use orchestra?
   - Spec out ::expression
   - Spec out errors? Loosely?
+
+  HERE'S WHAT'LL HAPPEN HERE:
+
+  The expression-parser funcs need to... Hmmmm... I don't want
+  to complicate the state model by having intermediate :exprs []
+  accumulation.
+
+  These methods could either:
+    - return [expr tokens]
+    - throw an error
+
+
+  Macro view (statement parsing level):
+  {:tokens []
+   :statements []
+   :errors []}
+
+  But at the expression parsing level, we need to return:
+  [expr tokens]
+  Or else throw an exception :( and the caller can do the sync.
+
+  And, perhaps we can get away with *just* a top-level catch
+  out in the main parse-statement loop?
+
+  I guess I need to understand where all we synchronize --
+  where *don't* we throw out the entire statement none-the-wiser?
+
   ")
 
 (s/def ::state (s/cat :expr :adasam.cljlox.spec/expression
@@ -33,29 +63,43 @@
 ;;  expression =calls=> equality => ... => expression
 (declare expression)
 
-(defn consume [tok-type tokens error]
-  (let [[tok & more-toks :as tokens] tokens]
-    (if (= tok-type (:token-type tok))
-      [tok more-toks]
-      (throw+ (assoc error :type :parse-error)))))
+(defn synchronize-tokens [tokens]
+  ;; Eat one token off the bat
+  (let [tokens (rest tokens)]
+    (loop [[tok & more-tokens :as tokens] tokens]
+      (condp #(%1 %2) (:token-type tok)
+        #{:SEMICOLON} more-tokens
+        #{:CLASS
+          :FUN
+          :VAR
+          :FOR
+          :IF
+          :WHILE
+          :PRINT
+          :RETURN
+          :EOF} tokens
+        nil? (do
+               (println "TODO: synchronization error")
+               [])
+        (recur more-tokens)))))
 
-(defn synchronize [tokens]
-  (loop [[tok & more-tokens :as tokens] tokens]
-    (condp #(%1 %2) (:token-type tok)
-      #{:SEMICOLON} more-tokens
-      #{:CLASS
-        :FUN
-        :VAR
-        :FOR
-        :IF
-        :WHILE
-        :PRINT
-        :RETURN
-        :EOF} tokens
-      nil? (do
-             (println "TODO: synchronization error")
-             [])
-      (recur more-tokens))))
+(defn synchronize [state]
+  (update state :tokens synchronize-tokens))
+
+(defn consume [tok-type error state]
+  (let [{:keys [tokens]} state
+        [tok & _] tokens]
+    (if (= tok-type (:token-type tok))
+      [tok (update state :tokens rest)]
+      [nil (-> state
+               (update :errors conj error)
+               (synchronize))])))
+
+#_(defn consume [tok-type tokens error]
+    (let [[tok & more-toks :as tokens] tokens]
+      (if (= tok-type (:token-type tok))
+        [tok more-toks]
+        (throw+ (assoc error :type :parse-error)))))
 
 (defn primary [tokens]
   {:post [(vector? %)]}
@@ -161,27 +205,38 @@
     [{:stmt-type :expression, :expression expression}
      tokens]))
 
-(defn var-declaration [tokens]
-  (let [[name [tok & more-toks]] (consume :IDENTIFIER
-                                          tokens
-                                          {:message "Expected a variable name."})
-         stmt {:stmt-type :var, :name name}]
-    (if (= :EQUAL (:token-type tok))
-      (let [[expression tokens] (expression more-toks)
-            [_ tokens] (consume :SEMICOLON tokens {:message "Expected semicolon."})]
-        [(assoc stmt :initializer expression) tokens])
-      [stmt (second (consume :SEMICOLON more-toks {:message "Expected semicolon."}))])))
+;; TODO: left off here, replacing a `tokens` argument with `state`
+(defn var-declaration [state]
+  (let [[name state] (consume :IDENTIFIER
+                              {:message "Expected a variable name."}
+                              state)
+        [tok & _] (:tokens state)]
+    (cond
+      (not name) state
+
+      (= :EQUAL (:token-type tok))
+      (let [[expression tokens] (expression more-toks)]))
+
+    #_(if name
+        (let [stmt {:stmt-type :var :name name}])
+        state)))
+    ;     stmt {:stmt-type :var, :name name}]
+    ;(if (= :EQUAL (:token-type tok))
+    ;  (let [[expression tokens] (expression more-toks)
+    ;        [_ tokens] (consume :SEMICOLON tokens {:message "Expected semicolon."})]
+    ;    [(assoc stmt :initializer expression) tokens])
+    ;  [stmt (second (consume :SEMICOLON more-toks {:message "Expected semicolon."}))])))
 
 
 (declare statement)
-(defn declaration [[tok & more-toks :as tokens]]
-  (try+
+(defn declaration [{:keys [tokens] :as state}]
+  (let [[tok & _] tokens]
     (if (= :VAR (:token-type tok))
-      (var-declaration more-toks)
-      (statement tokens))
-    (catch Object e
+      (var-declaration (update state :tokens rest))
+      (statement state)))
+  #_(catch Object e
       (prn e)
-      [nil (synchronize tokens)])))
+      [nil (synchronize-tokens tokens)]))
 
 
 (defn block [tokens]
@@ -208,16 +263,21 @@
 
 
 (defn parse [tokens]
-  (loop [statements []
-         [tok & _ :as tokens] tokens]
-    (cond
-      (nil? tok) (throw+ {:type :parse-error
-                          :message "Expected EOF token."})
-      (= :EOF (:token-type tok)) statements
-      :else (let [[statement tokens] (declaration tokens)
-                  statements (if (some? statement)
-                               (conj statements statement)
-                               statements)]
-              (recur statements tokens)))))
+  (loop [state {:tokens tokens
+                :statements []
+                :errors []}]
+    (let [tok (get-in state [:tokens first])]
+      (cond
+        (nil? tok)
+        (-> state
+            (update :errors conj {:type :parse-error
+                                  :message "Expected EOF token."})
+            (dissoc :tokens))
+
+        (= :EOF (:token-type tok))
+        (dissoc state :tokens)
+
+        :else (let [state (declaration state)]
+                (recur state))))))
 
 

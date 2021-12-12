@@ -1,8 +1,8 @@
 (ns adasam.cljlox.scanner
+  "Lox scanner; scans source code into a sequence of tokens."
   (:require [clojure.alpha.spec :as s]
             [clojure.alpha.spec.test :as stest]
             [slingshot.slingshot :refer [throw+]]
-            [clojure.pprint :as pp]
             [clojure.string :as str]
             [adasam.cljlox.spec]))
 
@@ -22,23 +22,23 @@
                                     :source ::source})
                          [*]))
 
-(defn safe-char-at [s i]
+(defn- safe-char-at [s i]
   (when (< i (count s))
     (.charAt s i)))
 
-(defn safe-parse-long [str-or-char]
+(defn- safe-parse-long [x]
   (try
-    (Long/parseLong (str str-or-char))
+    (Long/parseLong (str x))
     (catch NumberFormatException _ nil)))
 
-(defn is-alpha [c]
+(defn is-alpha-or-underscore [c]
   (and c
        (or (Character/isAlphabetic (int c))
            (= \_ c))))
 
 (defn is-alpha-numeric [c]
   (and c
-       (or (is-alpha c) (Character/isDigit ^char c))))
+       (or (is-alpha-or-underscore c) (Character/isDigit ^char c))))
 
 (defn peek-first [state]
   (safe-char-at (:source state) (:idx state)))
@@ -180,7 +180,7 @@
                   \newline scan-newline
                   \" scan-string
                   (cond
-                    (is-alpha c) scan-identifier
+                    (is-alpha-or-underscore c) scan-identifier
                     (Character/isDigit ^char c) scan-number
                     :else err-char))]
     (handler state)))
